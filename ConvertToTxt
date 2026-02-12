@@ -1,0 +1,6 @@
+#!/bin/bash
+
+for file in "$@"; do
+    output="${file%.docx}.txt"  # Change extension to .txt
+    pandoc "$file" -t plain -o "$output" # Convert to txt
+done

@@ -1,0 +1,9 @@
+#!/bin/bash
+
+for file in "$@"; do
+    # Get the filename without the extension
+    filename="${file%.*}"
+    # Convert using ffmpeg without re-encoding
+    ffmpeg -i "$file" -c copy "${filename}.mp4"
+done
+

@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# Nautilus script: Create Video from Image and Audio
+# Combines one image and one audio file into a video (fast & efficient)
+
+# --- Configuration ---
+# Video codec: libx264 with ultrafast preset and stillimage tuning
+# Adjust CRF: lower = better quality, higher = smaller file (28-35 is reasonable)
+VIDEO_CODEC="libx264"
+PRESET="ultrafast"
+TUNE="stillimage"
+CRF="30"
+AUDIO_CODEC="aac"
+AUDIO_BITRATE="128k"
+PIX_FMT="yuv420p"
+# Scale to even dimensions (required for libx264), optionally limit resolution
+SCALE_FILTER="scale=trunc(iw/2)*2:trunc(ih/2)*2"
+# Max resolution (commented out – uncomment to limit size)
+# MAX_SIZE="1280:720"
+# SCALE_FILTER="scale='min($MAX_SIZE,iw)':'min($MAX_SIZE,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2"
+
+# --- Initial checks ---
+if ! command -v ffmpeg &>/dev/null; then
+    echo "Error: ffmpeg is not installed."
+    echo "Install it with: sudo apt install ffmpeg"
+    exit 1
+fi
+
+# Ensure exactly 2 files are selected (or at least one of each type)
+if [ $# -lt 2 ]; then
+    echo "Error: Please select at least one image and one audio file."
+    exit 1
+fi
+
+# --- Detect image and audio files ---
+image_file=""
+audio_file=""
+image_extensions="jpg jpeg png gif bmp tiff webp svg"
+audio_extensions="mp3 wav flac aac ogg m4a opus wma"
+
+for file in "$@"; do
+    if [ -f "$file" ]; then
+        ext="${file##*.}"
+        ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+        
+        # Check if it's an image
+        if [[ " $image_extensions " =~ " $ext_lower " ]] || \
+           file --mime-type -b "$file" | grep -q "^image/"; then
+            if [ -z "$image_file" ]; then
+                image_file="$file"
+            else
+                echo "Warning: Multiple images detected. Using first: $(basename "$image_file")"
+            fi
+        # Check if it's an audio file
+        elif [[ " $audio_extensions " =~ " $ext_lower " ]] || \
+             file --mime-type -b "$file" | grep -q "^audio/"; then
+            if [ -z "$audio_file" ]; then
+                audio_file="$file"
+            else
+                echo "Warning: Multiple audio files detected. Using first: $(basename "$audio_file")"
+            fi
+        else
+            echo "Skipping unknown file type: $(basename "$file")"
+        fi
+    fi
+done
+
+# Verify we have both an image and an audio file
+if [ -z "$image_file" ]; then
+    echo "Error: No image file found!"
+    exit 1
+fi
+if [ -z "$audio_file" ]; then
+    echo "Error: No audio file found!"
+    exit 1
+fi
+
+echo "========================================"
+echo "  Create Video from Image + Audio"
+echo "========================================"
+echo "Image : $(basename "$image_file")"
+echo "Audio : $(basename "$audio_file")"
+echo ""
+
+# --- Generate output filename ---
+# Use audio filename as base (or image if you prefer)
+base_name=$(basename "$audio_file")
+base_name_noext="${base_name%.*}"
+output_file="$(dirname "$audio_file")/${base_name_noext}_video.mp4"
+
+# Avoid overwriting
+counter=1
+while [ -f "$output_file" ]; do
+    output_file="$(dirname "$audio_file")/${base_name_noext}_video_$counter.mp4"
+    counter=$((counter + 1))
+done
+
+echo "Output: $(basename "$output_file")"
+echo ""
+echo "Encoding (fast settings) – please wait..."
+
+# --- Run ffmpeg ---
+ffmpeg -hide_banner -loglevel error -stats \
+    -loop 1 -i "$image_file" \
+    -i "$audio_file" \
+    -c:v "$VIDEO_CODEC" \
+    -preset "$PRESET" \
+    -tune "$TUNE" \
+    -crf "$CRF" \
+    -vf "$SCALE_FILTER" \
+    -pix_fmt "$PIX_FMT" \
+    -c:a "$AUDIO_CODEC" \
+    -b:a "$AUDIO_BITRATE" \
+    -shortest \
+    -y "$output_file"
+
+# --- Check result ---
+if [ $? -eq 0 ] && [ -f "$output_file" ]; then
+    echo ""
+    echo "✓ Success! Video created:"
+    echo "  $(basename "$output_file")"
+    echo "  Size: $(du -h "$output_file" | cut -f1)"
+    echo "  Duration: $(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$output_file" | cut -d. -f1) sec"
+    
+    # Show desktop notification
+    notify-send "Video Created" "$(basename "$output_file")\nSize: $(du -h "$output_file" | cut -f1)" -t 5000
+else
+    echo ""
+    echo "✗ Failed to create video."
+    notify-send -u critical "Video Creation Failed" "Check console for details"
+    exit 1
+fi
+
+# Keep terminal open to view results (optional)
+read -p "Press Enter to close..."

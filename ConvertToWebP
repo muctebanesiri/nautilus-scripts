@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Nautilus script to convert images to WebP format
+# Uses ImageMagick for conversion
+
+for file in "$@"; do
+    # Check if the file is an image
+    if [[ "$(file -b --mime-type "$file")" =~ ^image/ ]]; then
+        
+        # Extract filename without extension
+        base="${file%.*}"
+        
+        # Generate output filename with .webp extension
+        output="${base}.webp"
+        
+        # Check if output file already exists
+        if [[ -f "$output" ]]; then
+            # Ask user if they want to overwrite
+            zenity --question --text="File $output already exists. Overwrite?" \
+                   --title="File Exists"
+            if [[ $? -ne 0 ]]; then
+                continue  # Skip if user says no
+            fi
+        fi
+        
+        # Convert to WebP with quality setting (adjust as needed)
+        if convert "$file" -quality 90 "$output"; then
+            notify-send "Conversion Successful" \
+                "Converted $(basename "$file") to WebP"
+        else
+            zenity --error --text="Failed to convert $(basename "$file")"
+        fi
+    else
+        zenity --warning --text="$(basename "$file") is not a valid image file"
+    fi
+done

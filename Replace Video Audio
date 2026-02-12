@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Nautilus script to replace audio in video files
+# Usage: Select video file first, then audio file(s), then run script
+# For multiple videos: each video gets the first audio or matching audio
+
+# Function to replace audio in a single video
+replace_audio() {
+    local video_file="$1"
+    local audio_file="$2"
+    local output_format="${video_file##*.}"
+    local output_name="${video_file%.*}_with_new_audio.${output_format}"
+    
+    # Counter for duplicate names
+    local counter=1
+    local final_output="$output_name"
+    while [ -f "$final_output" ]; do
+        final_output="${video_file%.*}_with_new_audio_${counter}.${output_format}"
+        counter=$((counter + 1))
+    done
+    
+    echo "Processing: $(basename "$video_file")"
+    echo "Using audio: $(basename "$audio_file")"
+    
+    # Replace audio using ffmpeg
+    ffmpeg -i "$video_file" -i "$audio_file" \
+        -c:v copy \
+        -c:a aac \
+        -b:a 128k \
+        -map 0:v:0 \
+        -map 1:a:0 \
+        -shortest \
+        -y \
+        "$final_output" 2>&1 | grep -E "frame=|time=|size="
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Created: $(basename "$final_output")"
+        echo "   Original video: $(basename "$video_file")"
+        echo "   New audio: $(basename "$audio_file")"
+        echo ""
+        return 0
+    else
+        echo "✗ Failed to process: $(basename "$video_file")"
+        [ -f "$final_output" ] && rm "$final_output"
+        return 1
+    fi
+}
+
+# Main script execution
+echo "========================================"
+echo "       Replace Video Audio"
+echo "========================================"
+echo ""
+
+# Check if ffmpeg is available
+if ! command -v ffmpeg &>/dev/null; then
+    echo "Error: ffmpeg is not installed."
+    echo "Install it with: sudo apt install ffmpeg"
+    exit 1
+fi
+
+# Count selected files
+selected_count=$#
+echo "Files selected: $selected_count"
+echo ""
+
+# Separate video and audio files
+video_files=()
+audio_files=()
+
+for file in "$@"; do
+    if [ -f "$file" ]; then
+        # Check file type using mime type or extension
+        mime_type=$(file --mime-type -b "$file" 2>/dev/null)
+        extension="${file##*.}"
+        
+        # Check if it's likely a video file
+        if [[ "$mime_type" == video/* ]] || \
+           [[ "$extension" =~ ^(mp4|avi|mkv|mov|flv|wmv|webm|m4v|mpg|mpeg|3gp|ogg)$ ]]; then
+            video_files+=("$file")
+            echo "✓ Video detected: $(basename "$file")"
+        
+        # Check if it's likely an audio file
+        elif [[ "$mime_type" == audio/* ]] || \
+             [[ "$extension" =~ ^(mp3|wav|flac|aac|ogg|wma|m4a|opus)$ ]]; then
+            audio_files+=("$file")
+            echo "✓ Audio detected: $(basename "$file")"
+        else
+            echo "✗ Unknown format: $(basename "$file")"
+        fi
+    fi
+done
+
+echo ""
+echo "----------------------------------------"
+echo "Summary:"
+echo "  Videos found: ${#video_files[@]}"
+echo "  Audio files found: ${#audio_files[@]}"
+echo "----------------------------------------"
+echo ""
+
+# Validate we have what we need
+if [ ${#video_files[@]} -eq 0 ]; then
+    echo "Error: No video files selected!"
+    echo "Please select at least one video file."
+    exit 1
+fi
+
+if [ ${#audio_files[@]} -eq 0 ]; then
+    echo "Error: No audio files selected!"
+    echo "Please select at least one audio file."
+    exit 1
+fi
+
+# Processing logic
+processed=0
+failed=0
+
+# Case 1: One video, multiple audio files
+if [ ${#video_files[@]} -eq 1 ]; then
+    video="${video_files[0]}"
+    echo "Processing single video with multiple audio files..."
+    echo ""
+    
+    for audio in "${audio_files[@]}"; do
+        if replace_audio "$video" "$audio"; then
+            processed=$((processed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+# Case 2: Multiple videos, one audio file
+elif [ ${#audio_files[@]} -eq 1 ]; then
+    audio="${audio_files[0]}"
+    echo "Processing multiple videos with single audio file..."
+    echo ""
+    
+    for video in "${video_files[@]}"; do
+        if replace_audio "$video" "$audio"; then
+            processed=$((processed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+# Case 3: Equal number of videos and audio files (paired)
+elif [ ${#video_files[@]} -eq ${#audio_files[@]} ]; then
+    echo "Processing videos and audio files as pairs..."
+    echo ""
+    
+    for i in "${!video_files[@]}"; do
+        video="${video_files[$i]}"
+        audio="${audio_files[$i]}"
+        
+        if replace_audio "$video" "$audio"; then
+            processed=$((processed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+# Case 4: Multiple videos and audio files (first audio for all)
+else
+    echo "Multiple videos and audio files detected."
+    echo "Using first audio file for all videos..."
+    echo ""
+    
+    audio="${audio_files[0]}"
+    for video in "${video_files[@]}"; do
+        if replace_audio "$video" "$audio"; then
+            processed=$((processed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+fi
+
+# Summary
+echo "========================================"
+echo "            Processing Complete"
+echo "========================================"
+echo "Successfully processed: $processed"
+echo "Failed: $failed"
+echo ""
+
+# Show notification if processed any
+if [ $processed -gt 0 ]; then
+    notify-send "Audio Replacement Complete" \
+        "Replaced audio in $processed video file(s)\nOutput: Same folder as original"
+fi
+
+# Optional: Keep terminal open
+read -p "Press Enter to close..."
