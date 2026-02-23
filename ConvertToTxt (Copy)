@@ -1,0 +1,103 @@
+#!/bin/bash
+# Nautilus script to join all audio files in a folder (sorted by name) without re-encoding.
+
+# --- Determine target directory ---
+if [ -n "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" ]; then
+    first_file=$(echo "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" | head -n1)
+    target_dir=$(dirname "$first_file")
+else
+    current_uri="$NAUTILUS_SCRIPT_CURRENT_URI"
+    if [[ "$current_uri" =~ ^file:// ]]; then
+        target_dir=$(echo "$current_uri" | sed 's/^file:\/\///')
+    else
+        target_dir="$PWD"
+    fi
+fi
+
+cd "$target_dir" || exit 1
+
+# --- Audio file extensions (add more if needed) ---
+audio_exts=("mp3" "m4a" "flac" "wav" "ogg" "aac" "wma" "opus" "ac3")
+
+# --- Collect all audio files (case‑insensitive) ---
+shopt -s nullglob nocaseglob
+files=()
+for ext in "${audio_exts[@]}"; do
+    for f in *."$ext"; do
+        files+=("$f")
+    done
+done
+shopt -u nullglob nocaseglob
+
+if [ ${#files[@]} -eq 0 ]; then
+    zenity --error --text="No audio files found in this folder."
+    exit 1
+fi
+
+# --- Natural sort (by name/number) ---
+IFS=$'\n' sorted_files=($(sort -V <<<"${files[*]}"))
+unset IFS
+
+# --- Check ffmpeg ---
+if ! command -v ffmpeg &> /dev/null; then
+    zenity --error --text="ffmpeg is not installed. Please install it (e.g., sudo pacman -S ffmpeg)."
+    exit 1
+fi
+
+# --- Determine the most common extension (case‑insensitive) ---
+declare -A ext_count
+for f in "${sorted_files[@]}"; do
+    ext="${f##*.}"
+    ext_lower="${ext,,}"          # convert to lowercase
+    ((ext_count[$ext_lower]++))
+done
+
+# Find extension with highest count
+max_count=0
+most_common_ext=""
+for ext in "${!ext_count[@]}"; do
+    if [ "${ext_count[$ext]}" -gt "$max_count" ]; then
+        max_count="${ext_count[$ext]}"
+        most_common_ext="$ext"
+    fi
+done
+
+# If all files have the same extension (case‑insensitive), use that
+all_same=$(( ${#ext_count[@]} == 1 ? 1 : 0 ))
+
+if [ $all_same -eq 1 ]; then
+    out_ext="$most_common_ext"
+else
+    # Use the most common extension, but warn the user
+    out_ext="$most_common_ext"
+    zenity --info --text="Mixed extensions detected. Output will use the most common format (.$out_ext).\n\nIf files have different codecs, the join may fail or produce glitches."
+fi
+
+# --- Ask for output file name ---
+default_name="joined"
+out_name=$(zenity --entry --title="Output file name" --text="Enter name for joined audio (without extension):" --entry-text="$default_name")
+[ -z "$out_name" ] && out_name="$default_name"
+output_file="$out_name.$out_ext"
+
+if [ -e "$output_file" ]; then
+    zenity --question --text="File '$output_file' already exists. Overwrite?" || exit 1
+fi
+
+# --- Create concat list (with absolute paths) ---
+concat_list=$(mktemp)
+for f in "${sorted_files[@]}"; do
+    echo "file '$PWD/$f'" >> "$concat_list"
+done
+
+# --- Run ffmpeg ---
+if zenity --question --text="Join ${#sorted_files[@]} files into '$output_file'?"; then
+    ffmpeg -f concat -safe 0 -i "$concat_list" -c copy "$output_file" 2>&1 | \
+        zenity --text-info --title="FFmpeg output" --width=600 --height=400
+    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        zenity --info --text="Successfully joined files into '$output_file'."
+    else
+        zenity --error --text="Joining failed. See output for details."
+    fi
+fi
+
+rm "$concat_list"

@@ -1,23 +1,24 @@
 #!/bin/bash
 
-# Nautilus script: Create Video from Image and Audio
-# Combines one image and one audio file into a video (fast & efficient)
+# Nautilus script: Create Video from Image and Audio (MAXIMUM SPEED)
+# - Audio is copied (no re-encode)
+# - Video at 0.5 fps (one frame every 2 seconds)
+# - Image scaled down to max 640x480 (faster encoding)
+# - Uses ultrafast preset and all CPU cores
 
-# --- Configuration ---
-# Video codec: libx264 with ultrafast preset and stillimage tuning
-# Adjust CRF: lower = better quality, higher = smaller file (28-35 is reasonable)
+# --- Configuration (tuned for speed) ---
 VIDEO_CODEC="libx264"
 PRESET="ultrafast"
 TUNE="stillimage"
 CRF="30"
-AUDIO_CODEC="aac"
-AUDIO_BITRATE="128k"
+FRAMERATE="0.5"                     # One frame every 2 seconds
+AUDIO_CODEC="copy"                   # Copy audio, no re-encode
 PIX_FMT="yuv420p"
-# Scale to even dimensions (required for libx264), optionally limit resolution
-SCALE_FILTER="scale=trunc(iw/2)*2:trunc(ih/2)*2"
-# Max resolution (commented out – uncomment to limit size)
-# MAX_SIZE="1280:720"
-# SCALE_FILTER="scale='min($MAX_SIZE,iw)':'min($MAX_SIZE,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2"
+
+# Scale down to a maximum of 640x480 (change to 320x240 for even more speed)
+MAX_WIDTH="640"
+MAX_HEIGHT="480"
+SCALE_FILTER="scale='min($MAX_WIDTH,iw)':'min($MAX_HEIGHT,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2"
 
 # --- Initial checks ---
 if ! command -v ffmpeg &>/dev/null; then
@@ -77,13 +78,13 @@ fi
 
 echo "========================================"
 echo "  Create Video from Image + Audio"
+echo "  (MAX SPEED mode – audio copied, video at 0.5 fps, scaled to ${MAX_WIDTH}x${MAX_HEIGHT})"
 echo "========================================"
 echo "Image : $(basename "$image_file")"
 echo "Audio : $(basename "$audio_file")"
 echo ""
 
 # --- Generate output filename ---
-# Use audio filename as base (or image if you prefer)
 base_name=$(basename "$audio_file")
 base_name_noext="${base_name%.*}"
 output_file="$(dirname "$audio_file")/${base_name_noext}_video.mp4"
@@ -97,11 +98,11 @@ done
 
 echo "Output: $(basename "$output_file")"
 echo ""
-echo "Encoding (fast settings) – please wait..."
+echo "Processing (should be SUB-second)..."
 
-# --- Run ffmpeg ---
+# --- Run ffmpeg with maximum speed settings ---
 ffmpeg -hide_banner -loglevel error -stats \
-    -loop 1 -i "$image_file" \
+    -loop 1 -framerate "$FRAMERATE" -i "$image_file" \
     -i "$audio_file" \
     -c:v "$VIDEO_CODEC" \
     -preset "$PRESET" \
@@ -110,7 +111,7 @@ ffmpeg -hide_banner -loglevel error -stats \
     -vf "$SCALE_FILTER" \
     -pix_fmt "$PIX_FMT" \
     -c:a "$AUDIO_CODEC" \
-    -b:a "$AUDIO_BITRATE" \
+    -threads 0 \
     -shortest \
     -y "$output_file"
 

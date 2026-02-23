@@ -1,0 +1,97 @@
+#!/bin/bash
+# Nautilus script to add white or black padding to make any image square.
+
+# --- Helper: check if a file is an image by extension (case‑insensitive) ---
+is_image() {
+    local file="$1"
+    local ext="${file##*.}"
+    # Convert to lowercase for comparison
+    ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+    case "$ext_lower" in
+        jpg|jpeg|png|gif|bmp|tiff|tif|webp|svg|ico)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# --- Check for ImageMagick ---
+if ! command -v convert &> /dev/null || ! command -v identify &> /dev/null; then
+    zenity --error --text="ImageMagick (convert/identify) is not installed.\nPlease install it: sudo pacman -S imagemagick"
+    exit 1
+fi
+
+# --- Get selected files ---
+if [ -z "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" ]; then
+    zenity --error --text="No files selected. Please select one or more image files."
+    exit 1
+fi
+
+# --- Ask for background color ---
+color=$(zenity --list --radiolist --title="Background Color" \
+    --text="Choose the background color for the square image:" \
+    --column="Pick" --column="Color" \
+    FALSE "White" \
+    TRUE "Black" \
+    --width=300 --height=200)
+# If user cancels or closes dialog, exit
+if [ -z "$color" ]; then
+    exit 0
+fi
+# Convert to lowercase for ImageMagick's -background option
+color_lower=$(echo "$color" | tr '[:upper:]' '[:lower:]')
+
+# --- Process each selected file ---
+success_count=0
+fail_count=0
+processed_files=""
+
+# Read file list line by line (handles filenames with spaces)
+while IFS= read -r file; do
+    # Skip if not a regular file
+    [ -f "$file" ] || continue
+
+    # Check if it's an image
+    if ! is_image "$file"; then
+        processed_files+="Skipped (not an image): $(basename "$file")\n"
+        continue
+    fi
+
+    # Get dimensions
+    dimensions=$(identify -format "%w %h" "$file" 2>/dev/null)
+    if [ -z "$dimensions" ]; then
+        processed_files+="Failed to read dimensions: $(basename "$file")\n"
+        ((fail_count++))
+        continue
+    fi
+    read -r width height <<< "$dimensions"
+
+    # Compute square size (max dimension)
+    max=$(( width > height ? width : height ))
+
+    # Build output filename: append "_square" before extension
+    dir=$(dirname "$file")
+    base=$(basename "$file")
+    name="${base%.*}"
+    ext="${base##*.}"
+    output="${dir}/${name}_square.${ext}"
+
+    # Run ImageMagick to add padding
+    if convert "$file" -background "$color_lower" -gravity center -extent "${max}x${max}" "$output" 2>/dev/null; then
+        processed_files+="Created: $(basename "$output")\n"
+        ((success_count++))
+    else
+        processed_files+="Failed to process: $(basename "$file")\n"
+        ((fail_count++))
+    fi
+done <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+
+# --- Show summary ---
+if [ $success_count -gt 0 ] || [ $fail_count -gt 0 ]; then
+    summary="Done.\nSuccessful: $success_count\nFailed: $fail_count\n\nDetails:\n$processed_files"
+    zenity --info --title="Square Image Results" --text="$summary" --width=400
+fi
+
+exit 0
